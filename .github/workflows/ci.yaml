@@ -32,7 +32,7 @@ jobs:
         uses: docker/build-push-action@v3
         with:
           build-args: |
-            PG_VERSION=15.10
+            PG_VERSION=15.13
             PG_MAJOR_VERSION=15
             VERSION=${{ steps.get-latest-tag.outputs.tag }}
           context: .
@@ -40,13 +40,13 @@ jobs:
           push: true
           tags: |
             ghcr.io/groguelon/postgres-flex:15
-            ghcr.io/groguelon/postgres-flex:15.10
+            ghcr.io/groguelon/postgres-flex:15.13
       - name: Build and push Postgres 15 Timescale DB
         id: docker_build_15_timescaledb
         uses: docker/build-push-action@v3
         with:
           build-args: |
-            PG_VERSION=15.10
+            PG_VERSION=15.13
             PG_MAJOR_VERSION=15
             VERSION=${{ steps.get-latest-tag.outputs.tag }}
           context: .
@@ -54,7 +54,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/groguelon/postgres-flex-timescaledb:15
-            ghcr.io/groguelon/postgres-flex-timescaledb:15.10
+            ghcr.io/groguelon/postgres-flex-timescaledb:15.13
 
       - name: Build and push Postgres 16
         id: docker_build_16
