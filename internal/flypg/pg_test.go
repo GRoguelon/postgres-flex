@@ -16,8 +16,7 @@ const (
 	pgInternalConfigFilePath = "./test_results/postgresql.internal.conf"
 	pgUserConfigFilePath     = "./test_results/postgresql.user.conf"
 	pgPasswordFilePath       = "./test_results/default_password"
-
-	pgHBAFilePath = "./test_results/pg_hba.conf"
+	pgHBAFilePath            = "./test_results/pg_hba.conf"
 )
 
 func TestPGConfigInitialization(t *testing.T) {
@@ -33,6 +32,7 @@ func TestPGConfigInitialization(t *testing.T) {
 		InternalConfigFilePath: pgInternalConfigFilePath,
 		UserConfigFilePath:     pgUserConfigFilePath,
 		passwordFilePath:       pgPasswordFilePath,
+		barmanConfigPath:       testBarmanConfigDir,
 	}
 
 	if err := stubPGConfigFile(); err != nil {
@@ -112,7 +112,261 @@ func TestPGConfigInitialization(t *testing.T) {
 		if cfg["shared_preload_libraries"] != expected {
 			t.Fatalf("expected %s, got %s", expected, cfg["shared_preload_libraries"])
 		}
+	})
 
+	t.Run("archive-enabled", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory")
+
+		store, _ := state.NewStore()
+
+		barman, err := NewBarman(store, os.Getenv("S3_ARCHIVE_CONFIG"), DefaultAuthProfile)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := barman.LoadConfig(testBarmanConfigDir); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Run("defaults", func(t *testing.T) {
+			if err := pgConf.initialize(store); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := pgConf.CurrentConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if cfg["archive_mode"] != "on" {
+				t.Fatalf("expected archive_mode to be on, got %v", cfg["archive_mode"])
+			}
+
+			expected := fmt.Sprintf("'%s'", barman.walArchiveCommand())
+			if cfg["archive_command"] != expected {
+				t.Fatalf("expected %s, got %s", expected, cfg["archive_command"])
+			}
+
+			if cfg["archive_timeout"] != "60s" {
+				t.Fatalf("expected 60s, got %s", cfg["archive_timeout"])
+			}
+		})
+
+		t.Run("custom-archive-timeout-with-m", func(t *testing.T) {
+
+			barman.SetUserConfig(ConfigMap{"archive_timeout": "60m"})
+
+			if err := writeUserConfigFile(barman); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := pgConf.initialize(store); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := pgConf.CurrentConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if cfg["archive_timeout"] != "60min" {
+				t.Fatalf("expected 60min, got %s", cfg["archive_timeout"])
+			}
+		})
+
+		t.Run("custom-archive-timeout-with-min", func(t *testing.T) {
+			barman.SetUserConfig(ConfigMap{"archive_timeout": "60min"})
+
+			if err := writeUserConfigFile(barman); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := pgConf.initialize(store); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := pgConf.CurrentConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if cfg["archive_timeout"] != "60min" {
+				t.Fatalf("expected 60min, got %s", cfg["archive_timeout"])
+			}
+		})
+
+		t.Run("custom-archive-timeout-with-s", func(t *testing.T) {
+			barman.SetUserConfig(ConfigMap{"archive_timeout": "60s"})
+
+			if err := writeUserConfigFile(barman); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := pgConf.initialize(store); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := pgConf.CurrentConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if cfg["archive_timeout"] != "60s" {
+				t.Fatalf("expected 60s, got %s", cfg["archive_timeout"])
+			}
+		})
+
+		t.Run("custom-archive-timeout-w", func(t *testing.T) {
+			barman.SetUserConfig(ConfigMap{"archive_timeout": "24h"})
+
+			if err := writeUserConfigFile(barman); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := pgConf.initialize(store); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := pgConf.CurrentConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if cfg["archive_timeout"] != "24h" {
+				t.Fatalf("expected 24h, got %s", cfg["archive_timeout"])
+			}
+		})
+	})
+
+	t.Run("barman-disabled", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory")
+		store, _ := state.NewStore()
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["archive_mode"] != "on" {
+			t.Fatalf("expected archive_mode to be on, got %v", cfg["archive_mode"])
+		}
+
+		t.Setenv("S3_ARCHIVE_CONFIG", "")
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err = pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["archive_mode"] != "off" {
+			t.Fatalf("expected archive_mode to be off, got %v", cfg["archive_mode"])
+		}
+	})
+
+	t.Run("barman-restore-from-time", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_REMOTE_RESTORE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory?targetTime=2024-06-30T11:15:00-06:00")
+		store, _ := state.NewStore()
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["recovery_target_time"] != "'2024-06-30T11:15:00-06:00'" {
+			t.Fatalf("expected recovery_target_time to be 2024-06-30T11:15:00-06:00, got %v", cfg["recovery_target_time"])
+		}
+	})
+
+	t.Run("barman-restore-from-name", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_REMOTE_RESTORE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory?targetName=20240626T172443")
+		store, _ := state.NewStore()
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["recovery_target_name"] != "barman_20240626T172443" {
+			t.Fatalf("expected recovery_target_name to be barman_20240626T172443, got %v", cfg["recovery_target_name"])
+		}
+	})
+
+	t.Run("barman-restore-from-target", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_REMOTE_RESTORE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory?target=immediate")
+		store, _ := state.NewStore()
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["recovery_target"] != "immediate" {
+			t.Fatalf("expected recovery_target to be immediate, got %v", cfg["recovery_target_name"])
+		}
+	})
+
+	t.Run("barman-restore-from-target-time-non-inclusive", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_REMOTE_RESTORE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory?targetTime=2024-06-30T11:15:00Z&targetInclusive=false")
+		store, _ := state.NewStore()
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["recovery_target_time"] != "'2024-06-30T11:15:00+00:00'" {
+			t.Fatalf("expected recovery_target_time to be 2024-06-30T11:15:00+00:00, got %v", cfg["recovery_target_time"])
+		}
+
+		if cfg["recovery_target_inclusive"] != "false" {
+			t.Fatalf("expected recovery_target_inclusive to be false, got %v", cfg["recovery_target_inclusive"])
+		}
+	})
+
+	t.Run("barman-restore-from-target-time-custom-timeline", func(t *testing.T) {
+		t.Setenv("S3_ARCHIVE_REMOTE_RESTORE_CONFIG", "https://my-key:my-secret@fly.storage.tigris.dev/my-bucket/my-directory?targetTime=2024-06-30T11:15:00-06:00&targetTimeline=2")
+		store, _ := state.NewStore()
+
+		if err := pgConf.initialize(store); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := pgConf.CurrentConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if cfg["recovery_target_time"] != "'2024-06-30T11:15:00-06:00'" {
+			t.Fatalf("expected recovery_target_time to be 2024-06-30T11:15:00-06:00, got %v", cfg["recovery_target_time"])
+		}
+
+		if cfg["recovery_target_timeline"] != "2" {
+			t.Fatalf("expected recovery_target_timeline to be 2, got %v", cfg["recovery_target_timeline"])
+		}
 	})
 }
 
@@ -245,6 +499,16 @@ func setup(t *testing.T) error {
 	if _, err := os.Stat(pgTestDirectory); err != nil {
 		if os.IsNotExist(err) {
 			if err := os.Mkdir(pgTestDirectory, 0750); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+
+	if _, err := os.Stat(testBarmanConfigDir); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(testBarmanConfigDir, 0750); err != nil {
 				return err
 			}
 		} else {

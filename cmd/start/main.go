@@ -23,6 +23,7 @@ func main() {
 		}
 	}
 
+	// Deprecated - We are moving away from having a separate barman Machine
 	if os.Getenv("IS_BARMAN") != "" {
 		node, err := flybarman.NewNode()
 		if err != nil {
@@ -38,6 +39,7 @@ func main() {
 		}
 
 		svisor := supervisor.New("flybarman", 1*time.Minute)
+		svisor.AddProcess("cron", "/usr/sbin/cron -f", supervisor.WithRestart(0, 5*time.Second))
 		svisor.AddProcess("barman", fmt.Sprintf("tail -f %s", node.LogFile))
 		svisor.AddProcess("admin", "/usr/local/bin/start_admin_server",
 			supervisor.WithRestart(0, 5*time.Second),
@@ -154,7 +156,7 @@ func scaleToZeroWorker(ctx context.Context, node *flypg.Node) error {
 				continue
 			}
 			log.Printf("Current connection count is %d\n", current)
-			if current >= 1 {
+			if current > 1 {
 				continue
 			}
 			return fmt.Errorf("scale to zero condition hit")
